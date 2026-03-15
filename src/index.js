@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { createClient } from './bot.js';
+import { startOverlayServer } from './overlay.js';
 
 const required = [
   'TWITCH_BOT_USERNAME',
@@ -14,6 +15,8 @@ for (const key of required) {
     process.exit(1);
   }
 }
+
+startOverlayServer(process.env.PORT || 3001);
 
 const client = createClient();
 
