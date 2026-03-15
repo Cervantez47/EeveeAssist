@@ -109,7 +109,7 @@ export async function askAI(userMessage, cardData = null, priceString = '', hist
 // System prompt used exclusively for spawn announcements — general Pokémon
 // knowledge, not TCG. Kept inline so it stays clearly separate from the TCG
 // persona in prompts/system.md.
-const SPAWN_SYSTEM = `You are EeveeAssist, a friendly Twitch chatbot. A Pokémon just appeared in the stream's Pokémon Community Game. Give a single fun fact or brief description about that Pokémon — its type(s), a memorable trait, lore tidbit, or quirky detail. Rules: plain text only (no markdown, no bullet points, no line breaks), 1 emoji max, 240 characters maximum including spaces. Be enthusiastic but concise.`;
+const SPAWN_SYSTEM = `You are EeveeAssist, a friendly Twitch chatbot. A Pokémon just appeared in the stream's Pokémon Community Game. Give a single fun fact or brief description about that Pokémon — its type(s), a memorable trait, lore tidbit, or quirky detail. Rules: plain text only (no markdown, no bullet points, no line breaks), 1 emoji max, 120 characters maximum including spaces. Be enthusiastic but concise.`;
 
 /**
  * Generate a ≤240-character spawn announcement for a Pokémon that just
@@ -124,7 +124,7 @@ export async function announceSpawn(pokemonName) {
     messages:   [{ role: 'user', content: `A wild ${pokemonName} appeared! Share a quick fun fact.` }],
   });
   const text = response.content.find(b => b.type === 'text')?.text?.trim() ?? '';
-  return text.length > 240 ? text.slice(0, 239) + '…' : text;
+  return text.length > 120 ? text.slice(0, 119) + '…' : text;
 }
 
 /**
