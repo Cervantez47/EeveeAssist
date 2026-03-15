@@ -1,16 +1,18 @@
 # EeveeAssist
 
-A Twitch chatbot powered by Claude AI that answers questions about Pokémon Trading Card Game cards — including set identification, card details, and approximate market values.
+A Twitch chatbot powered by Claude AI that answers general Pokémon knowledge questions and provides card pricing when asked. Also integrates with the Pokémon Community Game to auto-announce Pokémon spawns in chat, and drives a live OBS overlay showing Pokémon artwork.
 
 ---
 
 ## Features
 
 - Responds when mentioned via `@EeveeAssist` or when a chatter replies to the bot's message
-- Stays strictly on-topic: Pokémon TCG only — politely declines all other subjects
-- Asks clarifying set questions (e.g. *"Are you asking about Pikachu from Prismatic Evolutions or Base Set?"*)
-- Provides approximate market value for specific card printings
-- All responses capped at Twitch's 500-character limit
+- **Default mode**: General Pokémon knowledge (types, evolutions, moves, lore, Pokédex info) — 120-character responses
+- **Card value mode**: Activates only when a chatter explicitly asks about price, value, or worth — up to 500-character responses with Scrydex TCG API data + Brave web search
+- Conversational memory per user — follow-up questions like "what about Charmander?" work naturally (5-minute TTL, 3 exchanges)
+- Auto-announces Pokémon Community Game spawns: detects `pokemoncommunitygame` bot messages, posts a fun fact about the spawned Pokémon (120 chars)
+- Drives an OBS overlay via SSE — shows official Pokémon artwork + name when a chatter asks about a Pokémon
+- Politely declines off-topic queries
 
 ---
 
@@ -19,17 +21,22 @@ A Twitch chatbot powered by Claude AI that answers questions about Pokémon Trad
 ```
 EeveeAssist/
 ├── README.md
-├── .env                  # secrets (not committed)
-├── .env.example          # template for required env vars
+├── STREAMELEMENTS.md         # notes for future StreamElements migration
+├── .env                      # secrets (not committed)
+├── .env.example              # template for required env vars
 ├── package.json
+├── Dockerfile
+├── railway.json
 ├── src/
-│   ├── index.js          # entry point — starts the bot
-│   ├── bot.js            # tmi.js Twitch client, message routing
-│   ├── ai.js             # Claude API integration, prompt building
-│   ├── pokemon.js        # Pokémon TCG API wrapper (card lookup, market value)
-│   └── utils.js          # truncate to 500 chars, mention detection, helpers
+│   ├── index.js              # entry point — starts bot + overlay SSE server
+│   ├── bot.js                # tmi.js Twitch client, message routing, spawn detection
+│   ├── ai.js                 # Claude API integration, prompt building, spawn announcements
+│   ├── pokemon.js            # Scrydex TCG API wrapper (card lookup, market value)
+│   ├── search.js             # Brave Search API wrapper (web search tool for Claude)
+│   ├── overlay.js            # HTTP SSE server — broadcasts Pokémon query events to OBS
+│   └── utils.js              # truncate, mention detection, reply detection helpers
 └── prompts/
-    └── system.md         # Claude system prompt — persona + scope guardrails
+    └── system.md             # Claude system prompt — persona, scope, response rules
 ```
 
 ---
@@ -39,86 +46,120 @@ EeveeAssist/
 Copy `.env.example` to `.env` and fill in:
 
 ```
-TWITCH_BOT_USERNAME=      # bot account username
+TWITCH_BOT_USERNAME=      # bot account username (EeveeAssist)
 TWITCH_OAUTH_TOKEN=       # oauth:xxxx from twitchapps.com/tmi
 TWITCH_CHANNEL=           # channel to join (without #)
 ANTHROPIC_API_KEY=        # Claude API key
-POKEMON_TCG_API_KEY=      # api.pokemontcg.io key (free tier available)
-BOT_USERNAME=             # same as TWITCH_BOT_USERNAME, used for @-detection
+POKEMON_TCG_API_KEY=      # Scrydex API key
+POKEMON_TCG_TEAM_ID=      # Scrydex team ID
+BRAVE_SEARCH_API_KEY=     # Brave Search API key (for web search tool)
+PORT=3001                 # overlay SSE server port (Railway sets this automatically)
 ```
 
 ---
 
 ## Tech Stack
 
-| Layer | Library |
+| Layer | Library / Service |
 |---|---|
 | Twitch chat | [tmi.js](https://tmijs.com/) |
-| AI responses | [Anthropic Claude API](https://docs.anthropic.com/) (`claude-haiku-4-5`) |
-| Card data & prices | [Pokémon TCG API](https://pokemontcg.io/) |
+| AI responses | Anthropic Claude API (`claude-haiku-4-5-20251001`) |
+| Card data & prices | [Scrydex API](https://api.scrydex.com/pokemon/v1) |
+| Web search | [Brave Search API](https://api.search.brave.com) |
+| Pokémon name/ID lookup | [PokeAPI](https://pokeapi.co/) |
+| Overlay push | Node.js built-in `http` — SSE (`/events` endpoint) |
 | Runtime | Node.js 20+ |
 
 ---
 
-## Flow
+## Message Flow
 
 ```
 Chatter message
+      │
+      ├─ From pokemoncommunitygame? ──Yes──▶ parse spawn, post fun fact in chat
       │
       ├─ @mention or reply to bot? ──No──▶ ignore
       │
       Yes
       │
       ▼
- pokemon.js — search card by name
+ bot.js — does query mention price/value/card keywords?
       │
-      ├─ Multiple sets found? ──Yes──▶ ai.js builds clarifying question
+      ├─ Yes ──▶ pokemon.js (Scrydex) — fetch card + price
+      │               │
+      │               ▼
+      │          ai.js — Claude with card context (≤500 chars)
       │
-      No (or set already known)
-      │
-      ▼
- pokemon.js — fetch market price (TCGPlayer mid)
-      │
-      ▼
- ai.js — build prompt with card context + price
-      │
-      ▼
- Claude API ──▶ response
-      │
-      ▼
- utils.js — truncate to ≤500 chars
-      │
-      ▼
- bot.js — send reply to Twitch chat
+      └─ No ──▶ ai.js — Claude general Pokémon knowledge (≤120 chars)
+                    │
+                    ▼
+               utils.js — truncate to limit
+                    │
+                    ▼
+               bot.js — send reply to Twitch chat
+                    │
+                    ▼
+               overlay.js — extract Pokémon name via PokeAPI,
+                            broadcast to OBS overlay (per-user dedup)
 ```
 
 ---
 
-## Response Guardrails
+## OBS Overlay
 
-- **Off-topic queries**: *"Sorry, I only know about Pokémon TCG! Ask me about a card and I'll look it up. 🃏"*
-- **Unknown card**: *"I couldn't find that card — can you double-check the name or tell me which set it's from?"*
-- **Character limit**: Hard truncated at 497 chars with `…` appended if needed
+EeveeAssist runs an HTTP server (same process as the bot) with two endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /events` | SSE stream — pushes `{ id, name }` when a Pokémon is queried |
+| `GET /health` | Railway health check |
+
+The overlay lives in the [`poke-community-overlay`](https://github.com/Cervantez47/poke-community-overlay) repo.
+
+### OBS Browser Sources
+
+| Source | URL |
+|---|---|
+| Spawn overlay | `https://cervantez47.github.io/poke-community-overlay/` |
+| EeveeAssist query overlay | `https://cervantez47.github.io/poke-community-overlay/eeveeassist.html?server=https://eeveeassist-production.up.railway.app` |
+
+- Both sources: 320px image, positioned `top: 100px / left: 200px`
+- Spawn overlay: shows official Pokémon artwork + "A WILD [NAME] HAS APPEARED IN CHAT!" during the 90-second catch window; fetches name from PokeAPI by Pokédex ID
+- EeveeAssist overlay: fades in for 8 seconds when a chatter queries a Pokémon; per-user dedup prevents repeat shows for the same Pokémon within 5 minutes
 
 ---
 
-## Getting Started
+## Deployment
+
+Hosted on [Railway](https://railway.app) — auto-deploys on push to `main`.
+
+- **Service URL**: `https://eeveeassist-production.up.railway.app`
+- **Port**: Railway injects `PORT` automatically (configured as 8080 in the dashboard)
+- **Source**: `Cervantez47/EeveeAssist` → `main` branch
 
 ```bash
+# Local dev
 npm install
 cp .env.example .env
-# fill in .env values
-npm start
+# fill in .env values, set PORT=3001
+npm run dev
 ```
 
 ---
 
-## Roadmap
+## Response Behavior
 
-- [ ] Core bot scaffolding (`bot.js`, `index.js`)
-- [ ] Claude integration with system prompt (`ai.js`, `prompts/system.md`)
-- [ ] Pokémon TCG API wrapper with market value (`pokemon.js`)
-- [ ] Set disambiguation / clarifying question logic
-- [ ] Reply-chain tracking (respond to replies to bot messages)
-- [ ] 500-char truncation utility (`utils.js`)
-- [ ] `.env.example` and deployment notes
+| Query type | Example | Response limit | Data source |
+|---|---|---|---|
+| General Pokémon | "What type is Garchomp?" | 120 chars | Claude training knowledge |
+| Follow-up | "What about its evolution?" | 120 chars | Claude + conversation history |
+| Card value | "How much is a Charizard worth?" | 500 chars | Scrydex API + Brave Search |
+| Spawn announcement | *(auto, from PCG bot)* | 120 chars | Claude training knowledge |
+| Off-topic | "What's the weather?" | — | Polite decline |
+
+---
+
+## StreamElements Integration (Future)
+
+See [`STREAMELEMENTS.md`](STREAMELEMENTS.md) for notes on migrating both overlays to StreamElements Custom Widgets.
