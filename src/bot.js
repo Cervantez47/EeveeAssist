@@ -160,28 +160,32 @@ export function createClient() {
   return client;
 }
 
+const CARD_VALUE_PATTERN = /\b(price|value|worth|cost|how much|market|tcg|card|holo|rare|set|printing|graded|psa)\b/i;
+
 async function handleQuery(query, username, history) {
-  // Try the card API — fall back to Claude's own knowledge if unavailable
-  try {
-    const cards = await searchCardsByName(query);
+  // Only hit the card API when the user is explicitly asking about price/value
+  if (CARD_VALUE_PATTERN.test(query)) {
+    try {
+      const cards = await searchCardsByName(query);
 
-    if (cards.length) {
-      const bySet    = groupBySet(cards);
-      const setNames = Object.keys(bySet);
+      if (cards.length) {
+        const bySet    = groupBySet(cards);
+        const setNames = Object.keys(bySet);
 
-      if (setNames.length > 1) {
-        return await askSetClarification(query, setNames);
+        if (setNames.length > 1) {
+          return await askSetClarification(query, setNames);
+        }
+
+        const card     = cards[0];
+        const priceStr = formatPrices(card);
+        return await askAI(`@${username} asked: "${query}"`, card, priceStr, history);
       }
-
-      const card     = cards[0];
-      const priceStr = formatPrices(card);
-      return await askAI(`@${username} asked: "${query}"`, card, priceStr, history);
+    } catch (err) {
+      console.warn('[pokemon api] unavailable, falling back to AI knowledge:', err.message);
     }
-  } catch (err) {
-    console.warn('[pokemon api] unavailable, falling back to AI knowledge:', err.message);
   }
 
-  // API unavailable or no results — let Claude answer from its training knowledge
+  // Default: general Pokémon knowledge via Claude
   return await askAI(query, null, '', history);
 }
 
