@@ -127,6 +127,50 @@ export async function announceSpawn(pokemonName) {
   return text.length > 120 ? text.slice(0, 119) + '…' : text;
 }
 
+// System prompt for Twitch sub-event chat messages. EeveeAssist's voice as a
+// Pokémon-themed welcome/thank-you. Output is posted by Streamer.bot, not by
+// EeveeAssist directly.
+const SUB_SYSTEM = `You are EeveeAssist, a friendly Twitch chatbot welcoming subscribers to a Pokémon TCG stream. Write a single-line chat message celebrating the sub event using Pokémon-themed language (Elite Four, gym badges, evolving, type matchups, Pokéballs, trainers, the squad, etc.). Rules: plain text only, no markdown, no line breaks, 1 emoji max, 180 characters maximum. Be warm and enthusiastic but concise. Reference the username naturally. Vary your phrasing — don't repeat the same metaphor every time.`;
+
+const TIER_LABEL = { 1000: 'Tier 1', 2000: 'Tier 2', 3000: 'Tier 3', Prime: 'Prime' };
+
+function describeSubEvent(evt) {
+  const tier = TIER_LABEL[evt.tier] ?? evt.tier ?? 'Tier 1';
+  switch (evt.type) {
+    case 'sub':
+      return `${evt.userName} just subscribed (${tier}) for the first time.`;
+    case 'resub':
+      return `${evt.userName} just resubscribed (${tier}) — they have been subbed for ${evt.cumulativeMonths ?? '?'} months total.`;
+    case 'giftsub':
+      return `${evt.userName} gifted a ${tier} sub to ${evt.recipientUser}.`;
+    case 'communitygift':
+      return `${evt.userName} gifted ${evt.giftCount ?? 'multiple'} ${tier} subs to the community at once.`;
+    case 'prime':
+      return `${evt.userName} just subscribed with Prime.`;
+    default:
+      return `${evt.userName} just supported the channel (${evt.type}).`;
+  }
+}
+
+/**
+ * Generate a Pokémon-themed chat message celebrating a Twitch sub event.
+ * Streamer.bot calls this via POST /sub-event and posts the returned text
+ * to chat itself. Returns plain text, single line, ≤180 chars.
+ */
+export async function generateSubMessage(evt) {
+  const userPrompt = describeSubEvent(evt);
+  const response = await client.messages.create({
+    model:      'claude-haiku-4-5-20251001',
+    max_tokens: 200,
+    system:     SUB_SYSTEM,
+    messages:   [{ role: 'user', content: userPrompt }],
+  });
+  const text = response.content.find(b => b.type === 'text')?.text?.trim() ?? '';
+  // Strip any line breaks Claude might insert despite the rule, clamp length.
+  const flat = text.replace(/\s*\n+\s*/g, ' ');
+  return flat.length > 180 ? flat.slice(0, 179) + '…' : flat;
+}
+
 /**
  * When a card exists across multiple sets, lead with the most notable printing
  * and its price, then mention other versions exist.
