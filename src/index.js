@@ -16,9 +16,9 @@ for (const key of required) {
   }
 }
 
-startOverlayServer(process.env.PORT || 3001);
-
 const client = createClient();
+
+startOverlayServer(process.env.PORT || 3001, client);
 
 client.connect()
   .then(() => console.log(`EeveeAssist connected to #${process.env.TWITCH_CHANNEL}`))

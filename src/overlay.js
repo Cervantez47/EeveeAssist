@@ -3,6 +3,9 @@ import { generateSubMessage } from './ai.js';
 
 const clients = new Set(); // active SSE response objects
 
+let twitchClient = null; // tmi.js client passed in by index.js
+const CHANNEL    = process.env.TWITCH_CHANNEL;
+
 const VALID_SUB_TYPES = new Set(['sub', 'resub', 'giftsub', 'communitygift', 'prime']);
 
 function sendJson(res, status, payload) {
@@ -65,21 +68,40 @@ async function handleSubEvent(req, res) {
     return sendJson(res, 400, { error: 'recipientUser is required for giftsub' });
   }
 
+  let message;
   try {
-    const message = await generateSubMessage(body);
-    console.log(`[sub-event] ${body.type} ${body.userName} -> ${message}`);
-    return sendJson(res, 200, { message });
+    message = await generateSubMessage(body);
   } catch (err) {
     console.error('[sub-event] generation failed:', err);
     return sendJson(res, 500, { error: 'Generation failed' });
   }
+
+  console.log(`[sub-event] ${body.type} ${body.userName} -> ${message}`);
+
+  // Post via tmi.js. Streamer.bot is fire-and-forget; this is the only sender.
+  let posted = false;
+  if (twitchClient && CHANNEL) {
+    try {
+      await twitchClient.say(CHANNEL, message);
+      posted = true;
+    } catch (err) {
+      console.error('[sub-event] tmi.say failed:', err);
+    }
+  } else {
+    console.warn('[sub-event] no twitchClient or CHANNEL — message generated but not posted');
+  }
+
+  return sendJson(res, 200, { message, posted });
 }
 
 /**
  * Start an HTTP server that exposes an SSE endpoint at GET /events.
  * The overlay HTML connects here to receive real-time Pokémon query events.
+ * The optional `client` is a tmi.js Twitch client used by /sub-event to post
+ * sub-thank messages to chat directly.
  */
-export function startOverlayServer(port) {
+export function startOverlayServer(port, client = null) {
+  twitchClient = client;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost`);
 
